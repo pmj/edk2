@@ -281,6 +281,7 @@ INF  MdeModulePkg/Universal/Acpi/BootScriptExecutorDxe/BootScriptExecutorDxe.inf
 INF  MdeModulePkg/Universal/Acpi/BootGraphicsResourceTableDxe/BootGraphicsResourceTableDxe.inf
 
 INF  IntelFrameworkModulePkg/Universal/DataHubDxe/DataHubDxe.inf
+INF  OvmfPkg/HfsPlus/HfsPlus.inf
 
 INF  FatPkg/EnhancedFatDxe/Fat.inf
 

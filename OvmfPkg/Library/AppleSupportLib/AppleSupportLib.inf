@@ -29,6 +29,7 @@
   AppleSupport.c
   Console.c
   Datahub.c
+  Bds.c
 
 [Packages]
   MdePkg/MdePkg.dec
