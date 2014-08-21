@@ -1425,6 +1425,11 @@ Routine Description:
 
   DEBUG ((EFI_D_INFO, "PlatformBootManagerAfterConsole\n"));
 
+  //
+  // Initialize AppleSupport library
+  //
+  InitializeAppleSupport (gImageHandle, gST);
+
   if (PcdGetBool (PcdOvmfFlashVariablesEnable)) {
     DEBUG ((EFI_D_INFO, "PlatformBdsPolicyBehavior: not restoring NvVars "
       "from disk since flash variables appear to be supported.\n"));
