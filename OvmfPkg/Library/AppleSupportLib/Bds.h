@@ -12,17 +12,10 @@
 *
 **/
 
-#ifndef _APPLESUPPORT_LIB_INCLUDED_
-#define _APPLESUPPORT_LIB_INCLUDED_
 
-EFI_STATUS
-EFIAPI
-InitializeAppleSupport (
-  IN EFI_HANDLE         ImageHandle,
-  IN EFI_SYSTEM_TABLE   *SystemTable
-  );
+#ifndef _APPLESUPPORT_BDS_H_INCLUDED_
+#define _APPLESUPPORT_BDS_H_INCLUDED_
 
-EFI_STATUS
-BdsBootApple ();
+#define EFI_CORESERVICES L"System\\Library\\CoreServices\\boot.efi"
 
 #endif
