@@ -182,6 +182,7 @@
   XenHypercallLib|OvmfPkg/Library/XenHypercallLib/XenHypercallLib.inf
 
   AppleSupportLib|OvmfPkg/Library/AppleSupportLib/AppleSupportLib.inf
+  #  OsxAptioFixDrv|OvmfPkg/OsxAptioFixDrv/OsxAptioFixDrv.inf
 
 [LibraryClasses.common]
   BaseCryptLib|CryptoPkg/Library/BaseCryptLib/BaseCryptLib.inf
@@ -712,6 +713,7 @@
   #
   OvmfPkg/HfsPlus/HfsPlus.inf
   IntelFrameworkModulePkg/Universal/DataHubDxe/DataHubDxe.inf
+  # OvmfPkg/OsxAptioFixDrv/OsxAptioFixDrv2.inf
 
   #
   # Network Support
