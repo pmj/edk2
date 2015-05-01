@@ -40,7 +40,7 @@
   OvmfPkg/OvmfPkg.dec
 
 [LibraryClasses]
-#   OsxAptioFixDrv
+  OsxAptioFixDrv
   AppleSupportLib
   BaseLib
   MemoryAllocationLib

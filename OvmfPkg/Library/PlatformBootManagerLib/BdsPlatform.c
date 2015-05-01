@@ -1374,6 +1374,14 @@ Returns:
   PciAcpiInitialization ();
 }
 
+
+EFI_STATUS
+EFIAPI
+OsxAptioFixDrvEntrypoint (
+   IN EFI_HANDLE               ImageHandle,
+   IN EFI_SYSTEM_TABLE         *SystemTable
+   );
+
 /**
   Save the S3 boot script.
 
@@ -1429,6 +1437,7 @@ Routine Description:
   // Initialize AppleSupport library
   //
   InitializeAppleSupport (gImageHandle, gST);
+  OsxAptioFixDrvEntrypoint (gImageHandle, gST);
 
   if (PcdGetBool (PcdOvmfFlashVariablesEnable)) {
     DEBUG ((EFI_D_INFO, "PlatformBdsPolicyBehavior: not restoring NvVars "
