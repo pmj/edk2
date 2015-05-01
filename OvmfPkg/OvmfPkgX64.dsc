@@ -171,7 +171,7 @@
   XenHypercallLib|OvmfPkg/Library/XenHypercallLib/XenHypercallLib.inf
 
   AppleSupportLib|OvmfPkg/Library/AppleSupportLib/AppleSupportLib.inf
-  #  OsxAptioFixDrv|OvmfPkg/OsxAptioFixDrv/OsxAptioFixDrv.inf
+  OsxAptioFixDrv|OvmfPkg/OsxAptioFixDrv/OsxAptioFix2Drv.inf
 
 [LibraryClasses.common]
 !if $(SECURE_BOOT_ENABLE) == TRUE
