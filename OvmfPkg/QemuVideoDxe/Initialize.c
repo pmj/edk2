@@ -14,7 +14,7 @@
 **/
 
 #include "Qemu.h"
-
+#include "svga_reg.h"
 
 ///
 /// Generic Attribute Controller Register Settings
@@ -346,3 +346,109 @@ QemuVideoBochsModeSetup (
   return EFI_SUCCESS;
 }
 
+static inline void outl(UINT16 port, UINT32 val)
+{
+    asm volatile ( "outl %0, %1" : : "a"(val), "Nd"(port) );
+    /* There's an outb %al, $imm8  encoding, for compile-time constant port numbers that fit in 8b.  (N constraint).
+     * Wider immediate constants would be truncated at assemble-time (e.g. "i" constraint).
+     * The  outb  %al, %dx  encoding is the only option for all other cases.
+     * %1 expands to %dx because  port  is a uint16_t.  %w1 could be used if we had the port number a wider C type */
+}
+static inline UINT32 inl(UINT16 port)
+{
+    UINT32 ret;
+    asm volatile ( "inl %1, %0"
+                   : "=a"(ret)
+                   : "Nd"(port) );
+    return ret;
+}
+
+void qemu_vmsvga_register_write(QEMU_VIDEO_PRIVATE_DATA* Private, UINT16 reg, UINT32 value)
+{
+  outl(Private->VMWareSVGA2_BasePort + SVGA_INDEX_PORT, reg);
+  outl(Private->VMWareSVGA2_BasePort + SVGA_VALUE_PORT, value);
+}
+
+UINT32 qemu_vmsvga_register_read(QEMU_VIDEO_PRIVATE_DATA* Private, UINT16 reg)
+{
+  outl(Private->VMWareSVGA2_BasePort + SVGA_INDEX_PORT, reg);
+  return inl(Private->VMWareSVGA2_BasePort + SVGA_VALUE_PORT);
+}
+
+EFI_STATUS
+QemuVideoVmwareModeSetup (  QEMU_VIDEO_PRIVATE_DATA  *Private)
+{
+  qemu_vmsvga_register_write(Private, SVGA_REG_ENABLE, 0);
+
+  UINT32 svga2FBSize = qemu_vmsvga_register_read(Private, SVGA_REG_FB_SIZE);
+  if(svga2FBSize != 0)
+  {
+      DEBUG ((EFI_D_ERROR, "svga2FBSize 0x%x\n", svga2FBSize));
+  }
+  else
+  {
+      DEBUG ((EFI_D_ERROR, "svga2FBSize is 0 (got 0x%x) \n", svga2FBSize));
+  }
+  
+  Private->ModeData = AllocatePool(sizeof (Private->ModeData[0]) * QEMU_VIDEO_BOCHS_MODE_COUNT);
+  if (Private->ModeData == NULL) 
+  {
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  UINT32 maxWidth = qemu_vmsvga_register_read(Private, SVGA_REG_MAX_WIDTH);
+  DEBUG ((EFI_D_ERROR, "maxWidth (got 0x%x) \n", maxWidth));
+
+  UINT32 maxHeight = qemu_vmsvga_register_read(Private, SVGA_REG_MAX_HEIGHT);
+  DEBUG ((EFI_D_ERROR, "maxHeight (got 0x%x) \n", maxHeight));
+	
+  UINT32 capabilities = qemu_vmsvga_register_read(Private, SVGA_REG_CAPABILITIES);
+  UINT32 host_bits_per_pixel;
+  if ((capabilities & SVGA_CAP_8BIT_EMULATION) != 0)
+  {
+    host_bits_per_pixel = qemu_vmsvga_register_read(Private, SVGA_REG_HOST_BITS_PER_PIXEL);
+    qemu_vmsvga_register_write(Private, SVGA_REG_BITS_PER_PIXEL, host_bits_per_pixel);
+  }
+  else
+  {
+    host_bits_per_pixel = qemu_vmsvga_register_read(Private, SVGA_REG_BITS_PER_PIXEL);
+  }
+  DEBUG ((EFI_D_ERROR, "host bits per pixel: 0x%x\n", host_bits_per_pixel));
+	
+  QEMU_VIDEO_MODE_DATA *ModeData;
+  QEMU_VIDEO_BOCHS_MODES *VideoMode;
+
+  ModeData = Private->ModeData;
+  VideoMode = &QemuVideoBochsModes[0];
+  UINT32 Index;
+  for (Index = 0; Index < QEMU_VIDEO_BOCHS_MODE_COUNT; Index ++) 
+  {
+    UINTN RequiredFbSize;
+
+    ASSERT (host_bits_per_pixel % 8 == 0);
+    RequiredFbSize = (UINTN) VideoMode->Width * VideoMode->Height *
+                     (host_bits_per_pixel / 8);
+    if (RequiredFbSize <= svga2FBSize && VideoMode->Width <= maxWidth && VideoMode->Height <= maxHeight) 
+    {
+      DEBUG ((EFI_D_ERROR, "index %d \n", Index));
+
+      qemu_vmsvga_register_write(Private, SVGA_REG_WIDTH, VideoMode->Width);
+      qemu_vmsvga_register_write(Private, SVGA_REG_HEIGHT, VideoMode->Height);
+      UINT32 bytes_per_line =
+        qemu_vmsvga_register_read(Private, SVGA_REG_BYTES_PER_LINE);
+      ModeData->PixelsPerLine = bytes_per_line / (host_bits_per_pixel / 8);
+      
+      ModeData->InternalModeIndex    = Index;
+      ModeData->HorizontalResolution = VideoMode->Width;
+      ModeData->VerticalResolution   = VideoMode->Height;
+      ModeData->ColorDepth           = host_bits_per_pixel;
+      
+      ModeData ++ ;
+    }
+    VideoMode ++;
+  }
+  Private->MaxMode = ModeData - Private->ModeData;
+
+  return EFI_SUCCESS;
+  
+}

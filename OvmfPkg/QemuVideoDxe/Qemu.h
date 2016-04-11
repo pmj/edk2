@@ -56,6 +56,8 @@ typedef struct {
   UINT32  HorizontalResolution;
   UINT32  VerticalResolution;
   UINT32  ColorDepth;
+  // VMWare specific:
+  UINT32  PixelsPerLine; // includes any dead space
 } QEMU_VIDEO_MODE_DATA;
 
 #define PIXEL_RED_SHIFT   0
@@ -92,6 +94,7 @@ typedef enum {
   QEMU_VIDEO_CIRRUS_5446,
   QEMU_VIDEO_BOCHS,
   QEMU_VIDEO_BOCHS_MMIO,
+  QEMU_VIDEO_VMWARE_SVGA2,
 } QEMU_VIDEO_VARIANT;
 
 typedef struct {
@@ -119,6 +122,8 @@ typedef struct {
   QEMU_VIDEO_VARIANT                    Variant;
   FRAME_BUFFER_CONFIGURE                *FrameBufferBltConfigure;
   UINTN                                 FrameBufferBltConfigureSize;
+	
+  UINT16 VMWareSVGA2_BasePort;
 } QEMU_VIDEO_PRIVATE_DATA;
 
 ///
@@ -502,9 +507,27 @@ QemuVideoBochsModeSetup (
   BOOLEAN                  IsQxl
   );
 
+EFI_STATUS
+QemuVideoVmwareModeSetup (  QEMU_VIDEO_PRIVATE_DATA  *Private);
+
 VOID
 InstallVbeShim (
   IN CONST CHAR16         *CardName,
   IN EFI_PHYSICAL_ADDRESS FrameBufferBase
   );
+
+void qemu_vmsvga_register_write(QEMU_VIDEO_PRIVATE_DATA* Private, UINT16 reg, UINT32 value);
+UINT32 qemu_vmsvga_register_read(QEMU_VIDEO_PRIVATE_DATA* Private, UINT16 reg);
+
+EFI_STATUS
+QemuVMSVGA2VideoCompleteModeData (
+  IN  QEMU_VIDEO_PRIVATE_DATA           *Private,
+  OUT EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode
+  );
+
+void InitializeVMSVGA2GraphicsMode(
+  QEMU_VIDEO_PRIVATE_DATA  *Private,
+  QEMU_VIDEO_BOCHS_MODES  *ModeData
+  );
+
 #endif

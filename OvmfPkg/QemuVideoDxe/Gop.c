@@ -14,6 +14,7 @@
 **/
 
 #include "Qemu.h"
+#include "svga_reg.h"
 
 STATIC
 VOID
@@ -76,6 +77,84 @@ QemuVideoCompleteModeData (
 }
 
 
+EFI_STATUS
+QemuVMSVGA2VideoCompleteModeData (
+  IN  QEMU_VIDEO_PRIVATE_DATA           *Private,
+  OUT EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode
+  )
+{
+  EFI_GRAPHICS_OUTPUT_MODE_INFORMATION  *Info;
+  EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR     *FrameBufDesc;
+  QEMU_VIDEO_MODE_DATA           *ModeData;
+
+  ModeData = &Private->ModeData[Mode->Mode];
+  (void)ModeData;
+  Info = Mode->Info;
+ 
+  Info->Version = 0;
+
+  Info->PixelFormat = PixelBitMask;
+
+  UINT32 redMask = qemu_vmsvga_register_read(Private, SVGA_REG_RED_MASK);
+  Info->PixelInformation.RedMask = redMask;
+  DEBUG ((EFI_D_ERROR, "Info->redMask: 0x%x\n",  Info->PixelInformation.RedMask));
+  
+  UINT32 greenMask = qemu_vmsvga_register_read(Private, SVGA_REG_GREEN_MASK);
+  Info->PixelInformation.GreenMask =greenMask;
+  DEBUG ((EFI_D_ERROR, "Info->greenMask: 0x%x\n",  Info->PixelInformation.GreenMask));
+  
+  UINT32 blueMask = qemu_vmsvga_register_read(Private, SVGA_REG_BLUE_MASK);
+  Info->PixelInformation.BlueMask = blueMask;
+  DEBUG ((EFI_D_ERROR, "Info->blueMask: 0x%x\n",  Info->PixelInformation.BlueMask));
+  
+  
+  qemu_vmsvga_register_write(Private, SVGA_REG_ENABLE, 1);
+ 
+  UINT32 fbOffset = qemu_vmsvga_register_read(Private, SVGA_REG_FB_OFFSET);
+  DEBUG ((EFI_D_ERROR, "fbOffset: 0x%x\n", fbOffset));
+  UINT32 bytesPerLine = qemu_vmsvga_register_read(Private, SVGA_REG_BYTES_PER_LINE);
+  DEBUG ((EFI_D_ERROR, "bytesPerLine: 0x%x\n", bytesPerLine));
+  UINT32 depth = qemu_vmsvga_register_read(Private, SVGA_REG_DEPTH);
+  (void)depth;
+  DEBUG ((EFI_D_ERROR, "depth: 0x%x\n", depth));
+  UINT32 pseudocolour = qemu_vmsvga_register_read(Private, SVGA_REG_PSEUDOCOLOR);
+  (void)pseudocolour;
+  DEBUG ((EFI_D_ERROR, "pseudocolour: 0x%x\n", pseudocolour));
+
+  
+  UINT32 bits_per_pixel = qemu_vmsvga_register_read(Private, SVGA_REG_BITS_PER_PIXEL);
+
+  if (bits_per_pixel == 32)
+  {
+    if (blueMask == 0xff && greenMask == 0xff00 && redMask == 0xff0000)
+      Info->PixelFormat = PixelBlueGreenRedReserved8BitPerColor;
+    else if (blueMask == 0xff0000 && greenMask == 0xff00 && redMask == 0xff)
+      Info->PixelFormat = PixelRedGreenBlueReserved8BitPerColor;
+  }
+  
+
+  
+  Info->PixelInformation.ReservedMask = ((0x2u << (bits_per_pixel - 1u)) - 1u) & ~(redMask | greenMask | blueMask);
+
+  DEBUG ((EFI_D_ERROR, "bits per pixel: 0x%x, reserved mask %08x\n", bits_per_pixel, Info->PixelInformation.ReservedMask));
+  Info->PixelsPerScanLine = bytesPerLine / (bits_per_pixel / 8);
+ 
+  Private->PciIo->GetBarAttributes (
+                        Private->PciIo,
+                        PCI_BAR_IDX1,
+                        NULL,
+                        (VOID**) &FrameBufDesc
+                        );
+
+  Mode->FrameBufferBase = FrameBufDesc->AddrRangeMin + fbOffset;
+  Mode->FrameBufferSize = bytesPerLine * Info->VerticalResolution;
+  DEBUG ((EFI_D_ERROR, "FrameBufferBase: 0x%x, FrameBufferSize: 0x%x\n", Mode->FrameBufferBase, Mode->FrameBufferSize));
+
+  FreePool (FrameBufDesc);
+  return EFI_SUCCESS;
+}
+
+
 //
 // Graphics Output Protocol Member Functions
 //
@@ -112,7 +191,7 @@ Routine Description:
   QEMU_VIDEO_MODE_DATA     *ModeData;
 
   Private = QEMU_VIDEO_PRIVATE_DATA_FROM_GRAPHICS_OUTPUT_THIS (This);
-
+  DEBUG ((EFI_D_ERROR, "QemuVideoGraphicsOutputQueryMode: ModeNumber %x\n", ModeNumber));
   if (Info == NULL || SizeOfInfo == NULL || ModeNumber >= This->Mode->MaxMode) {
     return EFI_INVALID_PARAMETER;
   }
@@ -128,6 +207,8 @@ Routine Description:
   (*Info)->HorizontalResolution = ModeData->HorizontalResolution;
   (*Info)->VerticalResolution   = ModeData->VerticalResolution;
   QemuVideoCompleteModeInfo (ModeData, *Info);
+  if (Private->Variant == QEMU_VIDEO_VMWARE_SVGA2)
+    (*Info)->PixelsPerScanLine = ModeData->PixelsPerLine;
 
   return EFI_SUCCESS;
 }
@@ -166,6 +247,7 @@ Routine Description:
   }
 
   ModeData = &Private->ModeData[ModeNumber];
+  DEBUG ((EFI_D_ERROR, "Requested mode: 0x%x, %x x %x\n",  ModeNumber, ModeData->HorizontalResolution, ModeData->VerticalResolution));
 
   switch (Private->Variant) {
   case QEMU_VIDEO_CIRRUS_5430:
@@ -175,6 +257,9 @@ Routine Description:
   case QEMU_VIDEO_BOCHS_MMIO:
   case QEMU_VIDEO_BOCHS:
     InitializeBochsGraphicsMode (Private, &QemuVideoBochsModes[ModeData->InternalModeIndex]);
+    break;
+  case QEMU_VIDEO_VMWARE_SVGA2:
+    InitializeVMSVGA2GraphicsMode(Private, &QemuVideoBochsModes[ModeData->InternalModeIndex]);
     break;
   default:
     ASSERT (FALSE);
@@ -186,7 +271,10 @@ Routine Description:
   This->Mode->Info->VerticalResolution = ModeData->VerticalResolution;
   This->Mode->SizeOfInfo = sizeof(EFI_GRAPHICS_OUTPUT_MODE_INFORMATION);
 
-  QemuVideoCompleteModeData (Private, This->Mode);
+  if(Private->Variant == QEMU_VIDEO_VMWARE_SVGA2)
+    QemuVMSVGA2VideoCompleteModeData(Private, This->Mode);
+  else
+    QemuVideoCompleteModeData (Private, This->Mode);
 
   //
   // Allocate when using first time.

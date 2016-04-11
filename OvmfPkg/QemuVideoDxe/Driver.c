@@ -15,6 +15,7 @@
 **/
 
 #include "Qemu.h"
+#include "svga_reg.h"
 #include <IndustryStandard/Acpi.h>
 
 EFI_DRIVER_BINDING_PROTOCOL gQemuVideoDriverBinding = {
@@ -57,6 +58,11 @@ QEMU_VIDEO_CARD gQemuVideoCardList[] = {
         0x1050,
         QEMU_VIDEO_BOCHS_MMIO,
         L"QEMU VirtIO VGA"
+    },{
+        PCI_VENDOR_ID_VMWARE,
+        PCI_DEVICE_ID_VMWARE_SVGA2,
+        QEMU_VIDEO_VMWARE_SVGA2,
+        L"QEMU VMMWARE SVGA2"
     },{
         0 /* end of list */
     }
@@ -316,6 +322,42 @@ QemuVideoControllerDriverStart (
     }
   }
 
+  //check if accessing VMWARE_SVGA2 interface works
+  //
+  if(Private->Variant == QEMU_VIDEO_VMWARE_SVGA2)
+  {
+    EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR     *iodesc;
+    Private->PciIo->GetBarAttributes (
+                        Private->PciIo,
+                        PCI_BAR_IDX0,
+                        NULL,
+                        (VOID**) &iodesc
+                        );
+    Private->VMWareSVGA2_BasePort = iodesc->AddrRangeMin;
+    
+    UINT32 target_id = SVGA_ID_2;
+    UINT32 svga2IDRead;
+    while (1)
+    {
+      qemu_vmsvga_register_write(Private, SVGA_REG_ID, target_id);
+      svga2IDRead = qemu_vmsvga_register_read(Private, SVGA_REG_ID);
+      if (svga2IDRead == target_id || target_id <= SVGA_ID_0)
+        break;
+      --target_id;
+    }
+   
+    if(svga2IDRead != target_id)
+    {
+      DEBUG ((EFI_D_ERROR, "QemuVideo: QEMU_VIDEO_VMWARE_SVGA2 mismatch (got 0x%x)\n", svga2IDRead));
+      Status = EFI_DEVICE_ERROR;
+      goto RestoreAttributes;
+    }
+    else
+    {
+      DEBUG ((EFI_D_INFO, "QemuVideo: QEMU_VIDEO_VMWARE_SVGA2 (got 0x%x) = SVGA_ID_2 0x%x\n", svga2IDRead, target_id));
+    }
+  }
+	
   //
   // Get ParentDevicePath
   //
@@ -370,6 +412,9 @@ QemuVideoControllerDriverStart (
   case QEMU_VIDEO_BOCHS_MMIO:
   case QEMU_VIDEO_BOCHS:
     Status = QemuVideoBochsModeSetup (Private, IsQxl);
+    break;
+  case QEMU_VIDEO_VMWARE_SVGA2:
+    Status = QemuVideoVmwareModeSetup (Private);
     break;
   default:
     ASSERT (FALSE);
@@ -974,4 +1019,20 @@ InitializeQemuVideo (
   ASSERT_EFI_ERROR (Status);
 
   return Status;
+}
+
+void InitializeVMSVGA2GraphicsMode(
+  QEMU_VIDEO_PRIVATE_DATA  *Private,
+  QEMU_VIDEO_BOCHS_MODES  *ModeData
+  )
+{
+  qemu_vmsvga_register_write(Private, SVGA_REG_WIDTH, ModeData->Width);
+  qemu_vmsvga_register_write(Private, SVGA_REG_HEIGHT, ModeData->Height);
+
+  UINT32 capabilities = qemu_vmsvga_register_read(Private, SVGA_REG_CAPABILITIES);
+  if ((capabilities & SVGA_CAP_8BIT_EMULATION) != 0)
+    qemu_vmsvga_register_write(Private, SVGA_REG_BITS_PER_PIXEL, ModeData->ColorDepth);
+
+  SetDefaultPalette (Private);
+  ClearScreen (Private);
 }
