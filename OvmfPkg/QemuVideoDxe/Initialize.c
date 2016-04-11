@@ -14,6 +14,8 @@
 **/
 
 #include "Qemu.h"
+#include "svga_reg.h"
+#include "UnalignedIoInternal.h"
 
 
 ///
@@ -346,3 +348,89 @@ QemuVideoBochsModeSetup (
   return EFI_SUCCESS;
 }
 
+VOID
+QemuVideoVMWSVGA2RegisterWrite (
+  QEMU_VIDEO_PRIVATE_DATA   *Private,
+  UINT16                    reg,
+  UINT32                    value
+  )
+{
+  UnalignedIoWrite32 (Private->VMWareSVGA2_BasePort + SVGA_INDEX_PORT, reg);
+  UnalignedIoWrite32 (Private->VMWareSVGA2_BasePort + SVGA_VALUE_PORT, value);
+}
+
+UINT32
+QemuVideoVMWSVGA2RegisterRead (
+  QEMU_VIDEO_PRIVATE_DATA   *Private,
+  UINT16                    reg
+  )
+{
+  UnalignedIoWrite32 (Private->VMWareSVGA2_BasePort + SVGA_INDEX_PORT, reg);
+  return UnalignedIoRead32 (Private->VMWareSVGA2_BasePort + SVGA_VALUE_PORT);
+}
+
+EFI_STATUS
+QemuVideoVmwareModeSetup (
+  QEMU_VIDEO_PRIVATE_DATA *Private
+  )
+{
+  UINT32                 FBSize;
+  UINT32                 MaxWidth, MaxHeight;
+  UINT32                 Capabilities;
+  UINT32                 HostBitsPerPixel;
+  UINT32                 Index;
+  QEMU_VIDEO_MODE_DATA   *ModeData;
+  QEMU_VIDEO_BOCHS_MODES *VideoMode;
+
+  QemuVideoVMWSVGA2RegisterWrite (Private, SVGA_REG_ENABLE, 0);
+
+  Private->ModeData =
+    AllocatePool (sizeof (Private->ModeData[0]) * QEMU_VIDEO_BOCHS_MODE_COUNT);
+  if (Private->ModeData == NULL) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  FBSize =       QemuVideoVMWSVGA2RegisterRead (Private, SVGA_REG_FB_SIZE);
+  MaxWidth =     QemuVideoVMWSVGA2RegisterRead (Private, SVGA_REG_MAX_WIDTH);
+  MaxHeight =    QemuVideoVMWSVGA2RegisterRead (Private, SVGA_REG_MAX_HEIGHT);
+  Capabilities = QemuVideoVMWSVGA2RegisterRead (Private, SVGA_REG_CAPABILITIES);
+  if ((Capabilities & SVGA_CAP_8BIT_EMULATION) != 0) {
+    HostBitsPerPixel =
+      QemuVideoVMWSVGA2RegisterRead(Private, SVGA_REG_HOST_BITS_PER_PIXEL);
+    QemuVideoVMWSVGA2RegisterWrite (Private, SVGA_REG_BITS_PER_PIXEL, HostBitsPerPixel);
+  } else {
+    HostBitsPerPixel = QemuVideoVMWSVGA2RegisterRead(Private, SVGA_REG_BITS_PER_PIXEL);
+  }
+
+  ModeData = Private->ModeData;
+  VideoMode = &QemuVideoBochsModes[0];
+  for (Index = 0; Index < QEMU_VIDEO_BOCHS_MODE_COUNT; Index ++) {
+    UINTN RequiredFbSize;
+
+    ASSERT (HostBitsPerPixel % 8 == 0);
+    RequiredFbSize = (UINTN) VideoMode->Width * VideoMode->Height *
+                     (HostBitsPerPixel / 8);
+    if (RequiredFbSize <= FBSize
+     && VideoMode->Width <= MaxWidth
+     && VideoMode->Height <= MaxHeight)
+    {
+      UINT32 BytesPerLine;
+
+      QemuVideoVMWSVGA2RegisterWrite (Private, SVGA_REG_WIDTH, VideoMode->Width);
+      QemuVideoVMWSVGA2RegisterWrite (Private, SVGA_REG_HEIGHT, VideoMode->Height);
+      BytesPerLine =
+        QemuVideoVMWSVGA2RegisterRead (Private, SVGA_REG_BYTES_PER_LINE);
+      ModeData->PixelsPerLine = BytesPerLine / (HostBitsPerPixel / 8);
+
+      ModeData->InternalModeIndex    = Index;
+      ModeData->HorizontalResolution = VideoMode->Width;
+      ModeData->VerticalResolution   = VideoMode->Height;
+      ModeData->ColorDepth           = HostBitsPerPixel;
+
+      ModeData ++;
+    }
+    VideoMode ++;
+  }
+  Private->MaxMode = ModeData - Private->ModeData;
+  return EFI_SUCCESS;
+}
