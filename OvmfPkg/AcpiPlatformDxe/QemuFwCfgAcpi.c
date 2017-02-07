@@ -99,6 +99,39 @@ BlobCompare (
 
 
 /**
+  Comparator function for two opaque pointers, ordering on pointer value
+  itself.
+  Can be used as both Key and UserStruct comparator.
+
+  @param[in] Pointer1  First pointer.
+
+  @param[in] Pointer2  Second pointer.
+
+  @retval <0  If Pointer1 compares less than Pointer2.
+
+  @retval  0  If Pointer1 compares equal to Pointer2.
+
+  @retval >0  If Pointer1 compares greater than Pointer2.
+**/
+STATIC
+INTN
+EFIAPI
+PointerCompare (
+  IN CONST VOID *Pointer1,
+  IN CONST VOID *Pointer2
+  )
+{
+  if (Pointer1 == Pointer2) {
+    return 0;
+  } else if ((INTN)Pointer1 < (INTN)Pointer2) {
+    return -1;
+  } else {
+    return 1;
+  }
+}
+
+
+/**
   Process a QEMU_LOADER_ALLOCATE command.
 
   @param[in] Allocate     The QEMU_LOADER_ALLOCATE command to process.
@@ -534,27 +567,32 @@ UndoCmdWritePointer (
   This function assumes that the entire QEMU linker/loader command file has
   been processed successfully in a prior first pass.
 
-  @param[in] AddPointer        The QEMU_LOADER_ADD_POINTER command to process.
+  @param[in] AddPointer          The QEMU_LOADER_ADD_POINTER command to process.
 
-  @param[in] Tracker           The ORDERED_COLLECTION tracking the BLOB user
-                               structures.
+  @param[in] Tracker             The ORDERED_COLLECTION tracking the BLOB user
+                                 structures.
 
-  @param[in] AcpiProtocol      The ACPI table protocol used to install tables.
+  @param[in] AcpiProtocol        The ACPI table protocol used to install tables.
 
-  @param[in,out] InstalledKey  On input, an array of INSTALLED_TABLES_MAX UINTN
-                               elements, allocated by the caller. On output,
-                               the function will have stored (appended) the
-                               AcpiProtocol-internal key of the ACPI table that
-                               the function has installed, if the AddPointer
-                               command identified an ACPI table that is
-                               different from RSDT and XSDT.
+  @param[in,out] InstalledKey    On input, an array of INSTALLED_TABLES_MAX UINTN
+                                 elements, allocated by the caller. On output,
+                                 the function will have stored (appended) the
+                                 AcpiProtocol-internal key of the ACPI table that
+                                 the function has installed, if the AddPointer
+                                 command identified an ACPI table that is
+                                 different from RSDT and XSDT.
 
-  @param[in,out] NumInstalled  On input, the number of entries already used in
-                               InstalledKey; it must be in [0,
-                               INSTALLED_TABLES_MAX] inclusive. On output, the
-                               parameter is incremented if the AddPointer
-                               command identified an ACPI table that is
-                               different from RSDT and XSDT.
+  @param[in,out] NumInstalled    On input, the number of entries already used in
+                                 InstalledKey; it must be in [0,
+                                 INSTALLED_TABLES_MAX] inclusive. On output, the
+                                 parameter is incremented if the AddPointer
+                                 command identified an ACPI table that is
+                                 different from RSDT and XSDT.
+
+  @param[in,out] InstalledTables The ORDERED_COLLECTION tracking the ACPI tables
+                                 which have already been installed. If a new
+                                 table is encountered by the function, it is
+                                 added; existing ones will not be installed again.
 
   @retval EFI_INVALID_PARAMETER  NumInstalled was outside the allowed range on
                                  input.
@@ -583,7 +621,8 @@ Process2ndPassCmdAddPointer (
   IN     CONST ORDERED_COLLECTION      *Tracker,
   IN     EFI_ACPI_TABLE_PROTOCOL       *AcpiProtocol,
   IN OUT UINTN                         InstalledKey[INSTALLED_TABLES_MAX],
-  IN OUT INT32                         *NumInstalled
+  IN OUT INT32                         *NumInstalled,
+  IN OUT ORDERED_COLLECTION            *InstalledTables
   )
 {
   CONST ORDERED_COLLECTION_ENTRY                     *TrackerEntry;
@@ -678,6 +717,17 @@ Process2ndPassCmdAddPointer (
     return EFI_SUCCESS;
   }
 
+  Status = OrderedCollectionInsert (InstalledTables, NULL, (VOID *)(UINTN)PointerValue);
+  if (EFI_ERROR (Status)) {
+    if (Status == RETURN_ALREADY_STARTED) {
+      // Already seen a pointer to this table, skip installing it.
+      DEBUG ((EFI_D_VERBOSE, "%a: AcpiProtocol->InstallAcpiTable reports table"
+      "already installed, skipping. PointerValue=0x%Lx\n", __FUNCTION__, PointerValue));
+      Status = EFI_SUCCESS;
+    }
+    return Status;
+  }
+
   if (*NumInstalled == INSTALLED_TABLES_MAX) {
     DEBUG ((EFI_D_ERROR, "%a: can't install more than %d tables\n",
       __FUNCTION__, INSTALLED_TABLES_MAX));
@@ -738,6 +788,8 @@ InstallQemuFwCfgTables (
   UINTN                    *InstalledKey;
   INT32                    Installed;
   ORDERED_COLLECTION_ENTRY *TrackerEntry, *TrackerEntry2;
+  ORDERED_COLLECTION       *InstalledTables;
+  ORDERED_COLLECTION_ENTRY *InstalledTableEntry;
 
   Status = QemuFwCfgFindFile ("etc/table-loader", &FwCfgItem, &FwCfgSize);
   if (EFI_ERROR (Status)) {
@@ -826,14 +878,21 @@ InstallQemuFwCfgTables (
     goto RollbackWritePointersAndFreeTracker;
   }
 
+  InstalledTables = OrderedCollectionInit (PointerCompare, PointerCompare);
+  if (InstalledTables == NULL) {
+    Status = EFI_OUT_OF_RESOURCES;
+    goto FreeKeys;
+  }
+
   //
   // second pass: identify and install ACPI tables
   //
   Installed = 0;
   for (LoaderEntry = LoaderStart; LoaderEntry < LoaderEnd; ++LoaderEntry) {
     if (LoaderEntry->Type == QemuLoaderCmdAddPointer) {
-      Status = Process2ndPassCmdAddPointer (&LoaderEntry->Command.AddPointer,
-                 Tracker, AcpiProtocol, InstalledKey, &Installed);
+      Status = Process2ndPassCmdAddPointer (
+                 &LoaderEntry->Command.AddPointer, Tracker, AcpiProtocol,
+                 InstalledKey, &Installed, InstalledTables);
       if (EFI_ERROR (Status)) {
         goto UninstallAcpiTables;
       }
@@ -862,6 +921,12 @@ UninstallAcpiTables:
     DEBUG ((EFI_D_INFO, "%a: installed %d tables\n", __FUNCTION__, Installed));
   }
 
+  while (((InstalledTableEntry = OrderedCollectionMax(InstalledTables))) != NULL) {
+    OrderedCollectionDelete (InstalledTables, InstalledTableEntry, NULL);
+  }
+  OrderedCollectionUninit (InstalledTables);
+
+FreeKeys:
   FreePool (InstalledKey);
 
 RollbackWritePointersAndFreeTracker:
