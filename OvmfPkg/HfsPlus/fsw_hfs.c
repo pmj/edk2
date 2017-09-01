@@ -1128,6 +1128,101 @@ create_hfs_dnode(struct fsw_hfs_dnode  * dno,
     return FSW_SUCCESS;
 }
 
+static fsw_status_t fsw_hfs_lookup_hardlinked_file(
+    struct fsw_hfs_volume * vol, fsw_u32 inode, BTNodeDescriptor ** out_node, fsw_u32 * out_key_offset)
+{
+    struct HFSPlusCatalogKey   catkey = {};
+    fsw_status_t               status;
+    fsw_u32                    key_offset;
+    BTNodeDescriptor *         node = NULL;    
+    HFSPlusCatalogKey*         file_key;
+    fsw_u8*                    base;
+    fsw_u16                    rec_type;
+    
+    catkey.parentID = inode;
+    catkey.nodeName.length = 0;
+
+    status = fsw_hfs_btree_search (&vol->catalog_tree,
+                                   (BTreeKey*)&catkey,
+                                   vol->case_sensitive ?
+                                       fsw_hfs_cmp_catkey : fsw_hfs_cmpi_catkey,
+                                   &node, &key_offset);
+    Print(L"fsw_hfs_lookup_hardlinked_file inode %lx -> status %lx, node %lx\n",
+        inode, status, (long)node);
+   
+    if (status)
+        goto done;
+
+    file_key = (HFSPlusCatalogKey *)fsw_hfs_btree_rec (&vol->catalog_tree, node, key_offset);
+    /* for plain HFS "-(keySize & 1)" would be needed */
+    base = (fsw_u8*)file_key + be16_to_cpu(file_key->keyLength) + 2;
+    rec_type = be16_to_cpu(*(fsw_u16*)base);
+   
+    Print(L"fsw_hfs_lookup_hardlinked_file file_key %lx { parentID = %x, name = '%s' }, base %lx, rec_type %x\n",
+        (long)file_key, be32_to_cpu(file_key->parentID), file_key->nodeName.unicode, (long)base, rec_type);
+
+    if (rec_type == kHFSPlusFileThreadRecord)
+    {
+        unsigned i;
+        HFSPlusCatalogThread* thread = (HFSPlusCatalogThread*)base;
+
+        catkey.parentID = be32_to_cpu(thread->parentID);
+        catkey.nodeName.length = be16_to_cpu(thread->nodeName.length);
+        if (catkey.nodeName.length > 255)
+            catkey.nodeName.length = 255;
+        
+        for (i = 0; i < catkey.nodeName.length; ++i)
+        {
+            catkey.nodeName.unicode[i] = be16_to_cpu(thread->nodeName.unicode[i]);
+        }
+        if (catkey.nodeName.length < 255)
+            catkey.nodeName.unicode[catkey.nodeName.length] = 0;
+
+        Print(L"fsw_hfs_lookup_hardlinked_file thread %lx { parentID = %x, name = '%s' (%x) }\n",
+            (long)thread, catkey.parentID, catkey.nodeName.unicode, catkey.nodeName.length);
+        
+        fsw_free(node);
+        node = NULL;
+        
+        status = fsw_hfs_btree_search (&vol->catalog_tree,
+                                       (BTreeKey*)&catkey,
+                                       vol->case_sensitive ?
+                                           fsw_hfs_cmp_catkey : fsw_hfs_cmpi_catkey,
+                                       &node, &key_offset);
+        
+        Print(L"fsw_hfs_lookup_hardlinked_file file lookup from thread record -> status %lx, node %lx\n",
+            status, (long)node);
+        
+        if (status)
+            goto done;
+
+        file_key = (HFSPlusCatalogKey *)fsw_hfs_btree_rec (&vol->catalog_tree, node, key_offset);
+        /* for plain HFS "-(keySize & 1)" would be needed */
+        base = (fsw_u8*)file_key + be16_to_cpu(file_key->keyLength) + 2;
+        rec_type = be16_to_cpu(*(fsw_u16*)base);
+    
+        Print(L"fsw_hfs_lookup_hardlinked_file file_key %lx { parentID = %x }, base %lx, rec_type %x\n",
+            (long)file_key, be32_to_cpu(file_key->parentID), (long)base, rec_type);
+        if (rec_type == kHFSPlusFileRecord)
+        {
+            *out_node = node;
+            *out_key_offset = key_offset;
+            return status;
+        }
+        status = FSW_UNSUPPORTED;
+    }
+    else
+    {
+        status = FSW_UNSUPPORTED;
+    }
+    
+    
+done:
+    if (node != NULL)
+        fsw_free(node);
+
+    return status;
+}
 
 /**
  * Lookup a directory's child dnode by name. This function is called on a directory
@@ -1232,6 +1327,24 @@ static fsw_status_t fsw_hfs_dir_lookup(struct fsw_hfs_volume * vol,
         {
             HFSPlusCatalogFile* info = (HFSPlusCatalogFile*)base;
 
+            fsw_u32 type = be32_to_cpu(info->userInfo.fdType);
+            fsw_u32 creator_id = be32_to_cpu(info->userInfo.fdCreator);
+            if (type == kHardLinkFileType && creator_id == kHFSPlusCreator)
+            {
+                fsw_u32 inode = be32_to_cpu(info->bsdInfo.special.iNodeNum);
+                fsw_free(node);
+                node = NULL;
+                Print(L"fsw_hfs_dir_lookup file '%s' -> hard link: inode %lx\n", lookup_name->data, inode);
+                status = fsw_hfs_lookup_hardlinked_file(vol, inode, &node, &ptr);
+                if (status)
+                    goto done;
+                file_key = (HFSPlusCatalogKey *)fsw_hfs_btree_rec (&vol->catalog_tree, node, ptr);
+                /* for plain HFS "-(keySize & 1)" would be needed */
+                base = (fsw_u8*)file_key + be16_to_cpu(file_key->keyLength) + 2;
+                rec_type = be16_to_cpu(*(fsw_u16*)base);
+                info = (HFSPlusCatalogFile*)base;
+            }
+
             file_info.id = be32_to_cpu(info->fileID);
             file_info.type = FSW_DNODE_TYPE_FILE;
             file_info.size = be64_to_cpu(info->dataFork.logicalSize);
@@ -1240,6 +1353,8 @@ static fsw_status_t fsw_hfs_dir_lookup(struct fsw_hfs_volume * vol,
             file_info.mtime = be32_to_cpu(info->contentModDate);
             fsw_memcpy(&file_info.extents, &info->dataFork.extents,
                        sizeof file_info.extents);
+            Print(L"fsw_hfs_dir_lookup file '%s' -> size %lx, used = %lx, type = %x, flags %x\n",
+                 lookup_name->data, file_info.size, file_info.used, rec_type, info->flags);
             break;
         }
         default:
@@ -1255,6 +1370,8 @@ create:
     if (status)
         goto done;
 
+    Print(L"fsw_hfs_dir_lookup -> size %lx, type = %x\n",
+        file_info.size, rec_type);
 done:
 
     if (node != NULL)
