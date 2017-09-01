@@ -1489,7 +1489,7 @@ Routine Description:
   RemoveStaleFvFileOptions ();
   SetBootOrderFromQemu ();
 
-  BdsBootApple ();
+  //BdsBootApple ();
 }
 
 /**
