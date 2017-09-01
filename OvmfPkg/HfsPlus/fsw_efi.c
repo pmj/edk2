@@ -1001,18 +1001,24 @@ EFI_STATUS fsw_efi_dnode_getinfo(IN FSW_FILE_DATA *File,
     UINTN                 RequiredSize;
     struct fsw_volume_stat vsb;
     
+#if DEBUG_LEVEL
     Print(L"fsw_efi_dnode_getinfo: Buffer = %lx, BufferSize = %lx { %lx }\n",
         (unsigned long)Buffer, (unsigned long)BufferSize, BufferSize ? *BufferSize : 0
     );
+#endif
 
 
     if (CompareGuid(InformationType, &gEfiFileInfoGuid)) {
+#if DEBUG_LEVEL
         Print(L"fsw_efi_dnode_getinfo: FILE_INFO\n");
+#endif
 
         Status = fsw_efi_dnode_fill_FileInfo(Volume, File->shand.dnode, BufferSize, Buffer);
 
     } else if (CompareGuid(InformationType, &gEfiFileSystemInfoGuid)) {
+#if DEBUG_LEVEL
         Print(L"fsw_efi_dnode_getinfo: FILE_SYSTEM_INFO\n");
+#endif
 
         // check buffer size
         RequiredSize = SIZE_OF_EFI_FILE_SYSTEM_INFO + fsw_efi_strsize(&Volume->vol->label);
@@ -1041,7 +1047,9 @@ EFI_STATUS fsw_efi_dnode_getinfo(IN FSW_FILE_DATA *File,
         Status = EFI_SUCCESS;
 
     } else if (CompareGuid(InformationType, &gEfiFileSystemVolumeLabelInfoIdGuid)) {
+#if DEBUG_LEVEL
         Print(L"fsw_efi_dnode_getinfo: FILE_SYSTEM_VOLUME_LABEL\n");
+#endif
 
         // check buffer size
         RequiredSize = SIZE_OF_EFI_FILE_SYSTEM_VOLUME_LABEL_INFO + fsw_efi_strsize(&Volume->vol->label);
@@ -1122,7 +1130,7 @@ EFI_STATUS fsw_efi_dnode_fill_FileInfo(IN FSW_VOLUME_DATA *Volume,
     if (*BufferSize < RequiredSize) {
         // TODO: wind back the directory in this case
 
-        Print(L"...BUFFER TOO SMALL, RequiredSize = %lx\n", RequiredSize);
+        Print(L"...BUFFER TOO SMALL for '%s', RequiredSize = %lx, provided %lx\n", &dno->name, RequiredSize, *BufferSize);
         *BufferSize = RequiredSize;
         return EFI_BUFFER_TOO_SMALL;
     }
@@ -1149,7 +1157,9 @@ EFI_STATUS fsw_efi_dnode_fill_FileInfo(IN FSW_VOLUME_DATA *Volume,
 
     // prepare for return
     *BufferSize = RequiredSize;
+#if DEBUG_LEVEL
     Print(L"...returning '%s', FileSize = %lx\n", FileInfo->FileName, FileInfo->FileSize);
+#endif
     return EFI_SUCCESS;
 }
 

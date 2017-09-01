@@ -1353,8 +1353,10 @@ static fsw_status_t fsw_hfs_dir_lookup(struct fsw_hfs_volume * vol,
             file_info.mtime = be32_to_cpu(info->contentModDate);
             fsw_memcpy(&file_info.extents, &info->dataFork.extents,
                        sizeof file_info.extents);
+#if DEBUG_LEVEL
             Print(L"fsw_hfs_dir_lookup file '%s' -> size %lx, used = %lx, type = %x, flags %x\n",
                  lookup_name->data, file_info.size, file_info.used, rec_type, info->flags);
+#endif
             break;
         }
         default:
@@ -1370,8 +1372,10 @@ create:
     if (status)
         goto done;
 
+#if DEBUG_LEVEL
     Print(L"fsw_hfs_dir_lookup -> size %lx, type = %x\n",
         file_info.size, rec_type);
+#endif
 done:
 
     if (node != NULL)
