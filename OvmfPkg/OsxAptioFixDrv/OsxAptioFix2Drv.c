@@ -531,7 +531,7 @@ MOStartImage (
 	}
 
 	// check if this is boot.efi
-	if (TRUE) {
+	if (StrStriBasic(FilePathText, L"boot.efi")) {
 		//the presence of the variable means HibernateWake
 		//if the wake is canceled then the variable must be deleted
 		Status = gRT->GetVariable(L"boot-switch-vars", &gEfiAppleBootGuid, NULL, &Size, NULL);
