@@ -1477,6 +1477,9 @@ Routine Description:
   //
   TryRunningQemuKernel ();
 
+  // Scan for bootable macOS/OS X instances
+  BdsRefreshMacBootOptions();
+  
   EfiBootManagerRefreshAllBootOption ();
 
   //

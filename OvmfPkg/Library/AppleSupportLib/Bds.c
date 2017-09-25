@@ -3,12 +3,18 @@
 
 #include <PiDxe.h>
 
+#include <Library/BaseMemoryLib.h>
 #include <Library/DevicePathLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/GenericBdsLib.h>
+#include <Library/UefiBootManagerLib.h>
 #include <Protocol/SimpleFileSystem.h>
+#include <Protocol/BlockIo.h>
+#include <Protocol/LoadFile.h>
 
 #include <Guid/FileInfo.h>
+
+EFI_GUID mBdsAutoCreateAppleBootOptionGuid  = { 0x12d0ef4a, 0xbb4f, 0x4cb2, { 0x90, 0x17, 0x9b, 0x3a, 0x58, 0x56, 0x13, 0x00 } };
 
 EFI_STATUS
 BdsFileSystemLoadImage (
@@ -153,3 +159,236 @@ BdsBootApple ()
   }
   return EFI_SUCCESS;
 }
+
+CHAR16* CONST BOOT_EFI_PATHS[] = {
+  L"macOS Install Data\\Locked Files\\Boot Files\\boot.efi",
+  L"System\\Library\\CoreServices\\boot.efi",
+  L"usr\\standalone\\i386\\boot.efi",
+};
+
+
+static void InitBootEfiBootOption(
+  EFI_BOOT_MANAGER_LOAD_OPTION* BootOption, EFI_HANDLE* ParentDevice, CHAR16* PathToFile)
+{
+  EFI_STATUS Status;
+  EFI_DEVICE_PATH_PROTOCOL* FilePath;
+  CHAR16* PathText;
+  CHAR16* Description;
+
+  FilePath = FileDevicePath(ParentDevice, PathToFile);
+ 
+  PathText = ConvertDevicePathToText(FilePath, TRUE, TRUE);
+  DEBUG((EFI_D_INFO, "RegisterFileAsBootOption: device path '%s'\n", PathText ?: L"[NULL]"));
+  FreePool (PathText);
+
+  Description = L"Boot macOS/OS X";
+
+  Status = EfiBootManagerInitializeLoadOption (
+                 BootOption,
+                 LoadOptionNumberUnassigned,
+                 LoadOptionTypeBoot,
+                 LOAD_OPTION_ACTIVE,
+                 Description,
+                 FilePath,
+                 NULL,
+                 0
+                 );
+      ASSERT_EFI_ERROR (Status);
+}
+
+static BOOLEAN
+BdsIsAutoCreateAppleBootOption (
+  EFI_BOOT_MANAGER_LOAD_OPTION    *BootOption
+  )
+{
+  if ((BootOption->OptionalDataSize == sizeof (EFI_GUID)) &&
+      CompareGuid ((EFI_GUID *) BootOption->OptionalData, &mBdsAutoCreateAppleBootOptionGuid)
+      ) {
+    return TRUE;
+  } else {
+    return FALSE;
+  }
+}
+
+
+EFI_STATUS
+BdsRefreshMacBootOptions (
+  VOID
+  )
+{
+  UINTN                           Index;
+  UINTN                                 HandleCount;
+  EFI_HANDLE                            *Handles;
+  EFI_DEVICE_PATH_PROTOCOL        *DriveDevicePath;
+  CHAR16* PathText;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *FileSystem;
+  EFI_STATUS Status;
+  EFI_BLOCK_IO_PROTOCOL* BlockIO;
+  EFI_BOOT_MANAGER_LOAD_OPTION  *NvBootOptions;
+  UINTN                         NvBootOptionCount;
+  EFI_BOOT_MANAGER_LOAD_OPTION  *BootOptions;
+  UINTN                         BootOptionCount;
+  
+  gBS->LocateHandleBuffer (
+         ByProtocol,
+         &gEfiBlockIoProtocolGuid,
+         NULL,
+         &HandleCount,
+         &Handles
+         );
+
+
+
+
+  NvBootOptions = EfiBootManagerGetLoadOptions (&NvBootOptionCount, LoadOptionTypeBoot);
+
+  BootOptionCount = 0;
+  BootOptions = NULL;
+
+  DEBUG((EFI_D_INFO, "BdsRefreshMacBootOptions: %d Block IO protocol handlers found\n", HandleCount));
+  // TODO: deprioritise removable media similarly to BmEnumerateBootOptions
+  for (Index = 0; Index < HandleCount; Index++) {
+    DriveDevicePath = DevicePathFromHandle (Handles[Index]);
+    if (DriveDevicePath == NULL) {
+      DEBUG((EFI_D_INFO, "%d: NULL device path\n", Index));
+    } else {
+      PathText = ConvertDevicePathToText(DriveDevicePath, TRUE, TRUE);
+      DEBUG((EFI_D_INFO, "%d: device path '%s'\n", Index, PathText ?: L"[NULL]"));
+      FreePool (PathText);
+      
+      Status = gBS->HandleProtocol (
+        Handles[Index],
+        &gEfiSimpleFileSystemProtocolGuid,
+        (VOID *) &FileSystem
+      );
+      if (EFI_ERROR (Status)) {
+        DEBUG((EFI_D_INFO, "%d: Not a mounted file system\n", Index));
+      } else {
+        DEBUG((EFI_D_INFO, "%d: File system mounted on device\n", Index));
+        Status = gBS->HandleProtocol (
+          Handles[Index],
+          &gEfiBlockIoProtocolGuid,
+          (VOID *) &BlockIO
+        );
+        if (EFI_ERROR (Status)) {
+          DEBUG((EFI_D_INFO, "Error getting BlockIO protocol\n"));
+        } else {
+          UINT32 block_size = BlockIO->Media->BlockSize;
+          UINT32 read_size = 512;
+          UINT32 read_offset = 1024;
+          UINT32 num_blocks = read_size / block_size;
+          UINT32 buffer_header_offset = 0;
+          if (num_blocks == 0) {
+            num_blocks = 1;
+            read_size = block_size;
+          }
+          read_offset /= block_size;
+          if (read_offset == 0) {
+            buffer_header_offset = 1024;
+          }
+          VOID* Buffer = AllocatePool (read_size);
+          if (Buffer != NULL) {
+            BlockIO->ReadBlocks (
+               BlockIO,
+               BlockIO->Media->MediaId,
+               read_offset,
+               read_size,
+               Buffer
+               );
+            UINT8* volume_header = (UINT8*)Buffer + buffer_header_offset;
+            UINT16 Version = ((UINT16)volume_header[2] << 8) | volume_header[3];
+            DEBUG((EFI_D_INFO, "Volume header? Signature: 0x%02x%02x Version: %d\n", volume_header[0], volume_header[1], Version));
+            if (volume_header[0] == 0x48 && volume_header[1] == 0x2b && (Version == 4 || Version == 5)) {
+              DEBUG((EFI_D_INFO, "Seems to be an HFS+ volume!\n"));
+
+// locate a boot.efi
+  EFI_FILE_PROTOCOL               *Fs;
+  EFI_FILE_PROTOCOL               *BootEfiFile;
+
+              Status = FileSystem->OpenVolume (FileSystem, &Fs);
+              if (EFI_ERROR (Status)) {
+                DEBUG((EFI_D_INFO, "Error opening volume\n"));
+              } else {
+  INTN BootEfiFoundPathIndex = -1;
+  UINTN PathIndex;
+                for (PathIndex = 0; PathIndex < 3; ++PathIndex) {
+                  Status = Fs->Open(Fs, &BootEfiFile, BOOT_EFI_PATHS[PathIndex], EFI_FILE_MODE_READ, 0);
+                  if (EFI_ERROR (Status)) {
+                    if (Status == EFI_NOT_FOUND) {
+                      DEBUG((EFI_D_INFO, "No boot.efi found at '%s'\n", BOOT_EFI_PATHS[PathIndex]));
+                    } else {
+                      DEBUG((EFI_D_INFO, "Error accessing boot.efi at '%s'\n", BOOT_EFI_PATHS[PathIndex]));
+                    }
+                  } else {
+  UINTN                           Size;
+  EFI_FILE_INFO* FileInfo;
+                    Size = 0;
+                    BootEfiFile->GetInfo (BootEfiFile, &gEfiFileInfoGuid, &Size, NULL);
+                    FileInfo = AllocatePool (Size);
+                    Status = BootEfiFile->GetInfo (BootEfiFile, &gEfiFileInfoGuid, &Size, FileInfo);
+                    if (EFI_ERROR (Status) || Size < sizeof(*FileInfo)) {
+                      DEBUG((EFI_D_INFO, "Error for GetInfo on '%s'\n", BOOT_EFI_PATHS[PathIndex]));
+                      FreePool (FileInfo);
+                      BootEfiFile->Close(BootEfiFile);
+                      continue;
+                    }
+  UINT64 BootEfiFileSize;
+                    BootEfiFileSize = FileInfo->FileSize;
+                    DEBUG((EFI_D_INFO, "boot.efi with %d bytes found at '%s'\n", BootEfiFileSize, BOOT_EFI_PATHS[PathIndex]));
+                    FreePool (FileInfo);
+                    if (BootEfiFileSize == 0) {
+                      BootEfiFile->Close(BootEfiFile);
+                      continue;
+                    }
+                    
+                    BootOptions = ReallocatePool (
+                      sizeof (EFI_BOOT_MANAGER_LOAD_OPTION) * (BootOptionCount),
+                      sizeof (EFI_BOOT_MANAGER_LOAD_OPTION) * (BootOptionCount + 1),
+                      BootOptions
+                      );                    
+                    InitBootEfiBootOption(&BootOptions[BootOptionCount], Handles[Index], BOOT_EFI_PATHS[PathIndex]);
+                    BootOptionCount += 1;
+                    break;
+                  }
+                }
+                DEBUG((EFI_D_INFO, "BootEfiFoundPathIndex: %d\n", BootEfiFoundPathIndex));
+              }
+            }
+            FreePool(Buffer);
+          }
+        }
+      }
+    }
+  }
+
+  for (Index = 0; Index < BootOptionCount; Index++) {
+    BootOptions[Index].OptionalData     = AllocateCopyPool (sizeof (EFI_GUID), &mBdsAutoCreateAppleBootOptionGuid);
+    BootOptions[Index].OptionalDataSize = sizeof (EFI_GUID);
+  }
+
+  for (Index = 0; Index < NvBootOptionCount; ++Index) {
+    if (BdsIsAutoCreateAppleBootOption(&NvBootOptions[Index])) {
+      if (EfiBootManagerFindLoadOption (&NvBootOptions[Index], BootOptions, BootOptionCount) == -1) {
+        DEBUG ((EFI_D_INFO, "Removing boot option '%s'\n", NvBootOptions[Index].Description));
+        Status = EfiBootManagerDeleteLoadOptionVariable (NvBootOptions[Index].OptionNumber, LoadOptionTypeBoot);
+      }
+    }
+  }
+
+  for (Index = 0; Index < BootOptionCount; Index++) {
+    if (EfiBootManagerFindLoadOption (&BootOptions[Index], NvBootOptions, NvBootOptionCount) == -1) {
+      DEBUG ((EFI_D_INFO, "Adding boot option '%s'\n", BootOptions[Index].Description));
+      EfiBootManagerAddLoadOptionVariable (&BootOptions[Index], (UINTN) 0/*-1*/);
+    }
+  }
+
+  EfiBootManagerFreeLoadOptions (BootOptions,   BootOptionCount);
+  EfiBootManagerFreeLoadOptions (NvBootOptions, NvBootOptionCount);
+
+  if (HandleCount != 0) {
+    FreePool (Handles);
+  }
+  return EFI_SUCCESS;
+}
+
+

@@ -25,4 +25,8 @@ InitializeAppleSupport (
 EFI_STATUS
 BdsBootApple ();
 
+EFI_STATUS
+BdsRefreshMacBootOptions (
+  VOID
+  );
 #endif
