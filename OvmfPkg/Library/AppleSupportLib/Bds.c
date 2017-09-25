@@ -309,7 +309,6 @@ BdsRefreshMacBootOptions (
               if (EFI_ERROR (Status)) {
                 DEBUG((EFI_D_INFO, "Error opening volume\n"));
               } else {
-  INTN BootEfiFoundPathIndex = -1;
   UINTN PathIndex;
                 for (PathIndex = 0; PathIndex < 3; ++PathIndex) {
                   Status = Fs->Open(Fs, &BootEfiFile, BOOT_EFI_PATHS[PathIndex], EFI_FILE_MODE_READ, 0);
@@ -351,7 +350,6 @@ BdsRefreshMacBootOptions (
                     break;
                   }
                 }
-                DEBUG((EFI_D_INFO, "BootEfiFoundPathIndex: %d\n", BootEfiFoundPathIndex));
               }
             }
             FreePool(Buffer);
